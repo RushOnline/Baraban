@@ -1,5 +1,7 @@
 #include <QDebug>
 
+#include <QSerialPortInfo>
+
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
@@ -9,60 +11,89 @@ MainWindow::MainWindow(QWidget *parent) :
 {
     ui->setupUi(this);
     setupJackClient();
-    timer.setInterval(200);
-    timer.connect(&timer, SIGNAL(timeout()), this, SLOT(boom()));
-    timer.start();
+
+    connect(ui->playButton, SIGNAL(clicked()), this, SLOT(note_on()));
+
+    foreach (const QSerialPortInfo &info, QSerialPortInfo::availablePorts()) {
+        qDebug() << "Name : " << info.portName();
+        qDebug() << "Description : " << info.description();
+        qDebug() << "Manufacturer: " << info.manufacturer();
+
+        if ("CP2104 USB to UART Bridge Controller" == info.description()) {
+            serial.setPort(info);
+            serial.setBaudRate(QSerialPort::Baud57600);
+            serial.setDataBits(QSerialPort::Data8);
+            serial.setFlowControl(QSerialPort::NoFlowControl);
+            serial.setParity(QSerialPort::NoParity);
+            serial.setStopBits(QSerialPort::OneStop);
+            if (serial.open(QIODevice::ReadWrite)) {
+                connect(&serial, SIGNAL(readyRead()), this, SLOT(readPort()));
+                qDebug() << "Port successfully found and opened.";
+                break;
+            }
+        }
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    client_.deactivate();
+    client_.disconnectFromServer();
     delete ui;
 }
 
-void MainWindow::boom() {
-    QtJack::MidiData note_on[]  = { 0x90, 0x1E, 0x45};
-    QtJack::MidiData note_off[] = { 0x90, 0x1E, 0x00};
+void MainWindow::readPort() {
+    QString in = serial.readLine();
+    qDebug() << in;
+    note_on();
+}
 
-    _buffer.write(note_on, sizeof(note_on));
-    _buffer.write(note_off, sizeof(note_off));
+void MainWindow::note_on() {
+    QtJack::MidiData note_on[]  = { 0x99, 55, 127};
+    note_on[1] = ui->spinBox->value();
+    buffer_.write(note_on, sizeof(note_on));
+}
+
+void MainWindow::note_off() {
+    QtJack::MidiData note_off[] = { 0x89, 35, 0x00};
+    buffer_.write(note_off, sizeof(note_off));
 }
 
 void MainWindow::setupJackClient() {
-    // Connect to JACK server
-    _client.connectToServer("baraban");
+    client_.connectToServer("baraban");
 
-    // Create a 1000 seconds buffer (at 44,1kHz)
-    // Register two output ports
+    port_     = client_.registerMidiOutPort("out");
 
-    _outMidiPort     = _client.registerMidiOutPort("out");
-
-    _client.setProcessor(this);
+    client_.setProcessor(this);
 
     // Activate client.
-    _client.activate();
+    client_.activate();
 
-    // Connect automatically to qsynth playback.
-    _client.connect(_outMidiPort, _client.portByName("qsynth:midi"));
+    // Connect automatically to hydrogen or qsynth midi in port.
+    if (!client_.connect(port_, client_.portByName("Hydrogen:midi/capture_1")))
+        client_.connect(port_, client_.portByName("qsynth:midi"));
 }
 
 void MainWindow::process(int samples) {
-//    _buffer.copyTo(_outMidiPort.buffer(samples));
-//    _buffer.clear();
+    int available = buffer_.numberOfElementsAvailableForRead() / 3;
+    QtJack::MidiBuffer out = port_.buffer(samples);
+    out.clearEventBuffer();
 
-//    _buffer.read()
-//    _buffer.reset();
-
-    int available = _buffer.numberOfElementsAvailableForRead() / 3;
-    QtJack::MidiBuffer out = _outMidiPort.buffer(samples);
     int sample = 0;
+
+    if (available && samples) {
+        qDebug() << "available: " << available << "; samples: " << samples;
+    }
 
     while ( available && samples ) {
         QtJack::MidiData data[3];
-        _buffer.read(data, 3);
-        out.writeEvent(sample++, data, 3);
+        buffer_.read(data, 3);
+        qDebug("%02X %02X %02X", data[0], data[1], data[2]);
+        out.writeEvent(sample, data, 3);
+        sample += 3;
         available--;
-        samples--;
+        samples -= 3;
     }
 
-    _buffer.reset();
+    buffer_.reset();
 }

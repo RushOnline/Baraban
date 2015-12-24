@@ -4,6 +4,8 @@
 #include <QMainWindow>
 #include <QTimer>
 
+#include <QSerialPort>
+
 #include <Client>
 #include <Processor>
 #include <RingBuffer>
@@ -24,14 +26,18 @@ public:
     void process(int samples);
 
 public slots:
-    void boom();
+    void note_on();
+    void note_off();
+    void readPort();
 
 private:
     Ui::MainWindow*     ui;
-    QTimer              timer;
-    QtJack::Client      _client;
-    QtJack::MidiPort    _outMidiPort;
-    QtJack::MidiRingBuffer _buffer;
+    QTimer              timer_;
+    QtJack::Client      client_;
+    QtJack::MidiPort    port_;
+    QtJack::MidiRingBuffer buffer_;
+
+    QSerialPort serial;
 
     void setupJackClient();
 };
